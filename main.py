@@ -22,6 +22,7 @@ dccon = DC_CON()
 
 def main():
     console.log(dccon.getList("광대콘"))
+    console.log(dccon.getImageCDN("17221"))
     return 0
 
 def sigint_handler(signal, frame):
