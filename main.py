@@ -2,18 +2,16 @@ import subprocess
 import sys
 import os
 import time
-import base64
-import hashlib
-import hmac
 import rich
 import random
 import shutil
 import stat
 import signal
-import glob
-from get import DC_CON
 import telegram
 import requests
+import ffmpeg
+import PIL
+import glob
 
 from rich import print
 from rich import box
@@ -22,15 +20,14 @@ from rich.columns import Columns
 from rich.table import Table
 from telegram.ext import Updater, CommandHandler, CallbackQueryHandler
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup
-
+from get import DC_CON
 from PIL import Image, ImageSequence
 from PIL import features
-import moviepy.editor as mp
+from pathlib import Path
+from emoji import Emoji
+
 console = Console()
 dccon = DC_CON()
-
-def main():
-    return 0
 
 def telegram_bot_init():
     #https://python-telegram-bot.readthedocs.io/
@@ -76,73 +73,110 @@ def telegram_search(update, context):
     return 0
 
 def callback_get(update, context):
-    data_selected = update.callback_query.data.split("|")[0]
-    if data_selected.find("cancel") != -1 :
-        context.bot.edit_message_text(text="취소하였습니다.",
-                                      chat_id=update.callback_query.message.chat_id,
-                                      message_id=update.callback_query.message.message_id)
-        return
-    context.bot.edit_message_text(text="다운로드를 준비하고 있습니다.",
-                                      chat_id=update.callback_query.message.chat_id,
-                                      message_id=update.callback_query.message.message_id)
-    
-    cdn_image_list = dccon.getImageCDN(data_selected)
-    pwd = os.getcwd()
-    os.makedirs(pwd+"\\"+data_selected)
-    download_pwd = pwd+"\\"+data_selected
-    
-    i=0
-    for download_list in cdn_image_list:
-        context.bot.edit_message_text(text=str(i+1)+"/"+str(len(cdn_image_list))+" 다운로드 진행 중...\n"+progress(i+1,len(cdn_image_list)),
-                                      chat_id=update.callback_query.message.chat_id,
-                                      message_id=update.callback_query.message.message_id)
-        download(download_list[1],download_pwd+"\\"+str(i)+"."+download_list[0])
-        i = i + 1
-    
-    i=0
-    files = glob.glob(download_pwd+'\\*')
-    for f in files:
-        context.bot.edit_message_text(text=str(i+1)+"/"+str(len(cdn_image_list))+" 파일 변환 진행 중...\n"+progress(i+1,len(cdn_image_list)),
-                                      chat_id=update.callback_query.message.chat_id,
-                                      message_id=update.callback_query.message.message_id)
-        title, ext = os.path.splitext(f)
-        if ext in ['.jpg', '.png']:
-            img = Image.open(f).convert('RGB')
-            img_resize = img.resize((int(512), int(512)))
-            img_resize.save(title + '_resize' + ".png","png",quality=70)
-            os.remove(f)
-            os.rename(title + '_resize' + ".png",f)
-        if ext in ['.gif']:
-            #clip = mp.VideoFileClip(f).set_duration(2.9).resize((512,512)).without_audio()
-            #clip.write_videofile(title + '_resize' + ".WEBM",fps=30,codec="vp9")
-            os.remove(f)
-        i=i+1
+    try:
+        data_selected = update.callback_query.data.split("|")[0]
+        if data_selected.find("cancel") != -1 :
+            context.bot.edit_message_text(text="취소하였습니다.",
+                                          chat_id=update.callback_query.message.chat_id,
+                                          message_id=update.callback_query.message.message_id)
+            return
+        context.bot.edit_message_text(text="다운로드를 준비하고 있습니다.",
+                                          chat_id=update.callback_query.message.chat_id,
+                                          message_id=update.callback_query.message.message_id)
         
-
-    i=0
-    first = False
-    files = glob.glob(download_pwd+'\\*')
-    for f in files:
-        try:
-            context.bot.edit_message_text(text=str(i+1)+"/"+str(len(cdn_image_list))+" 파일 업로드 진행 중...\n"+progress(i+1,len(cdn_image_list)),
-                                      chat_id=update.callback_query.message.chat_id,
-                                      message_id=update.callback_query.message.message_id)
+        cdn_image_list = dccon.getImageCDN(data_selected)
+        pwd = os.getcwd()
+        
+        download_pwd = pwd+"/"+data_selected
+        
+        if os.path.exists(download_pwd):
+            shutil.rmtree(download_pwd)
+        os.makedirs(download_pwd)
+        
+        i=0
+        for download_list in cdn_image_list:
+            context.bot.edit_message_text(text=str(i+1)+"/"+str(len(cdn_image_list))+" 다운로드 진행 중...\n"+progress(i+1,len(cdn_image_list)),
+                                          chat_id=update.callback_query.message.chat_id,
+                                          message_id=update.callback_query.message.message_id)
+            download(download_list[1],download_pwd+"/"+str(i)+"."+download_list[0])
+            i = i + 1
+        
+        i=0
+        files = glob.glob(download_pwd+'/*')
+        for f in files:
+            context.bot.edit_message_text(text=str(i+1)+"/"+str(len(cdn_image_list))+" 파일 변환 진행 중...\n"+progress(i+1,len(cdn_image_list)),
+                                          chat_id=update.callback_query.message.chat_id,
+                                          message_id=update.callback_query.message.message_id)
             title, ext = os.path.splitext(f)
+            if ext in ['.gif']:
+                ConvertWEBP(f)
+                os.remove(f)
+                time.sleep(0.5)
             if ext in ['.jpg', '.png']:
-                if not first: #첫 등록인경우
-                    context.bot.create_new_sticker_set(user_id=str(update.callback_query.from_user.id),name="A"+data_selected+"_by_dcon_get_bot",title=update.callback_query.data.split("|")[1],png_sticker=open(f, 'rb'),emojis="👩")
-                    first = True
-                elif first: #등록내용이 있는경우
-                    context.bot.add_sticker_to_set(user_id=str(update.callback_query.from_user.id),name="A"+data_selected+"_by_dcon_get_bot",png_sticker=open(f, 'rb'),emojis="👩")
-            i = i+1
-        except Exception as e:
-            console.log("ERROR "+e)
+                img = Image.open(f).convert('RGB')
+                img_resize = img.resize((int(512), int(512)))
+                img_resize.save(title + '_resize' + ".png","png",quality=70)
+                os.remove(f)
+                os.rename(title + '_resize' + ".png",f)
+            i=i+1
             
-    context.bot.edit_message_text(text="https://t.me/addstickers/"+"A"+data_selected+"_by_dcon_get_bot",
-                                        chat_id=update.callback_query.message.chat_id,
-                                        message_id=update.callback_query.message.message_id)
-    shutil.rmtree(download_pwd)
-    console.log(data_selected+" 등록완료")
+
+        i=0
+        check_first = True
+        files = glob.glob(download_pwd+'/*')
+        
+        try:
+            context.bot.get_sticker_set("A"+data_selected+"_by_dcon_get_bot") #등록되지 않았다면 Exception 발생->True
+            check_first = False #등록된 스티커라면 False로 변경
+            set_sticker = context.bot.get_sticker_set("A"+data_selected+"_by_dcon_get_bot").stickers
+            for tmp_sticker in set_sticker:
+                context.bot.edit_message_text(text=str(i+1)+"/"+str(len(set_sticker))+" 중복된 데이터를 정리하고 있습니다...\n"+progress(i+1,len(set_sticker)),
+                                          chat_id=update.callback_query.message.chat_id,
+                                          message_id=update.callback_query.message.message_id)
+                succ = context.bot.delete_sticker_from_set(tmp_sticker.file_id)
+                i=i+1
+        except:
+            check_first = True
+            console.log("check_first = "+str(check_first))
+        
+        i=0
+        for f in files:
+            try:
+                context.bot.edit_message_text(text=str(i+1)+"/"+str(len(cdn_image_list))+" 파일 업로드 진행 중...\n"+progress(i+1,len(cdn_image_list)),
+                                          chat_id=update.callback_query.message.chat_id,
+                                          message_id=update.callback_query.message.message_id)
+                title, ext = os.path.splitext(f)
+                console.log("Processing "+title+ext)
+                if ext in ['.jpg', '.png']: #정적스티커
+                    if check_first: #첫 등록인경우
+                        context.bot.create_new_sticker_set(user_id=str(update.callback_query.from_user.id),name="A"+data_selected+"_by_dcon_get_bot",title=update.callback_query.data.split("|")[1],png_sticker=open(f, 'rb'),emojis=Emoji.random_emoji())
+                        check_first=False #첫 등록이후, 등록된 스티커패키지가 있음으로 변경(check_first->False)
+                    elif not check_first: #등록내용이 있는경우
+                        context.bot.add_sticker_to_set(user_id=str(update.callback_query.from_user.id),name="A"+data_selected+"_by_dcon_get_bot",png_sticker=open(f, 'rb'),emojis=Emoji.random_emoji())
+                if ext in ['.webm','.WEBM','.webp']: #동적스티커
+                    if check_first: #첫 등록인경우
+                        context.bot.create_new_sticker_set(user_id=str(update.callback_query.from_user.id),name="A"+data_selected+"_by_dcon_get_bot",title=update.callback_query.data.split("|")[1],webm_sticker=open(f, 'rb'),emojis=Emoji.random_emoji())
+                        check_first=False #첫 등록이후, 등록된 스티커패키지가 있음으로 변경(check_first->False)
+                    elif not check_first: #등록내용이 있는경우
+                        context.bot.add_sticker_to_set(user_id=str(update.callback_query.from_user.id),name="A"+data_selected+"_by_dcon_get_bot",webm_sticker=open(f, 'rb'),emojis=Emoji.random_emoji())
+                i = i+1
+            except Exception as e:
+                console.log("[bold][red]ERROR[/bold][/red] " +str(e.message))
+                context.bot.edit_message_text(text="[ERROR] 텔레그램 서버가 응답하지 않습니다. 잠시 후 재시도 해 주세요.",
+                                          chat_id=update.callback_query.message.chat_id,
+                                          message_id=update.callback_query.message.message_id)
+                return 0
+                
+        context.bot.edit_message_text(text="https://t.me/addstickers/"+"A"+data_selected+"_by_dcon_get_bot",
+                                            chat_id=update.callback_query.message.chat_id,
+                                            message_id=update.callback_query.message.message_id)
+        shutil.rmtree(download_pwd)
+        console.log(data_selected+" 등록완료")
+    except Exception as ex:
+        console.log("[bold][red]ERROR[/bold][/red] " +str(ex))
+        context.bot.edit_message_text(text="[ERROR] 처리되지 않은 오류가 발생하였습니다.\nException > "+str(ex),
+                                    chat_id=update.callback_query.message.chat_id,
+                                    message_id=update.callback_query.message.message_id)
     
 def build_menu(buttons, n_cols, header_buttons=None, footer_buttons=None):
     menu = [buttons[i:i + n_cols] for i in range(0, len(buttons), n_cols)]
@@ -160,26 +194,62 @@ def sigint_handler(signal, frame):
     sys.exit(0)
 
 def progress(count, total, suffix=''):
-    bar_len = 20
+    bar_len = 15
     filled_len = int(round(bar_len * count / float(total)))
 
     percents = round(100.0 * count / float(total), 1)
     bar = '■' * filled_len + '□' * (bar_len - filled_len)
 
-    retdata = ('[%s] %s%s ...%s\r' % (bar, percents, '%', suffix))
+    retdata = ('🖨️ [%s] %s%s ...%s\r' % (bar, percents, '%', suffix))
     return retdata;
     
 def download(url, file_name):
     with open(file_name, "wb") as file:   # open in binary mode
         response = requests.get(url)               # get request
         file.write(response.content)      # write to file
-        
+
+def random_emoji():
+    n = ['😀', '😁', '🤣', '😃', '😄', '😅', '😆', '😉', '😊', '😋', '😎', '😍', '😘', '😗']
+    random.shuffle(n)
+    text = n[0]
+    return text
+    
+def ConvertWEBP(filepath):
+    p = Path(filepath)
+    in_file = ffmpeg.input(filepath)
+    in_info = ffmpeg.probe(filepath)
+    stream = in_info['streams'][0]
+    fmt = in_info['format']
+    in_file = in_file.filter('fps', fps=30)
+    if stream['width'] >= stream['height']:
+        in_file = in_file.filter('scale', 512, -1)
+    else:
+        in_file = in_file.filter('scale', -1, 512)
+    if 'duration' in fmt:
+        duration = float(fmt['duration'])
+        if duration > 3.0:
+                in_file = in_file.filter('setpts', f"(3.0/{duration})*PTS")
+    else:
+        in_file = in_file.filter('setpts', f"1.0*PTS")
+    out_path = str(p.with_suffix('.WEBM'))
+    if os.path.exists(out_path):
+        out_path = str(p.with_suffix('.telegram.WEBM'))
+    in_file.output(
+                out_path,
+                pix_fmt='yuv420p',
+                vcodec='libvpx-vp9',
+                fs='255KB',
+                crf='60',
+                an=None,  # Remove Audio
+                loglevel="error",
+            ).overwrite_output().run()
+            
 if __name__ == "__main__":
     signal.signal(signal.SIGINT, sigint_handler)
     try:
         telegram_bot_init()
-        main()
     except Exception as ex:
-        console.log(ex)
+        #console.log(ex)
         console.log("[bold][red][Important][/red][/bold] 처리되지 않은 오류가 발생했습니다.")
         exit(0)
+        
